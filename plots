@@ -1,0 +1,432 @@
+#RCS curves
+library(rms)
+library(ggplot2)
+library(speedglm)
+library(dplyr)
+
+dd <- datadist(data)
+options(datadist = "dd")
+
+map_range <- seq(50, 150, by = 1)
+fit <- Glm(
+  outcome ~ rcs(MAP_f, 3)   
+    +maternal_age+paternal_age+maternal_bmi+paternal_bmi
+               +maternal_smoking+maternal_drinking+paternal_smoking+paternal_drinking
+               +maternal_ethnicity+maternal_use_medicine+maternal_education+maternal_residence+maternal_economic_pressure+region
+               +paternal_ethnicity+paternal_use_medicine+paternal_education+paternal_residence+paternal_economic_pressure
+               +harmful_exposures+history_apo+parity+diabetes+MAP_m,     #The mean arterial pressure（MAP） of spouses was mutually adjusted
+  family = poisson(link = "log"),
+  data = data
+)
+pred <- Predict(fit, MAP_f = map_range, 
+                ref.zero = TRUE, fun = exp, conf.int = 0.95)
+pred_df <- as.data.frame(pred)
+
+anova_result <- anova(fit)
+print(anova_result)
+p_value_nonlinear <- anova_result["MAP_f", "P"]
+
+pred_df <- pred_df %>% 
+ filter(!is.na(yhat), !is.na(MAP_f)) %>% 
+  arrange(MAP_f)
+
+p <- ggplot(pred_df, aes(x = MAP_f, y = yhat)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), fill = "lightpink", alpha = 0.5) +  
+  geom_line(linewidth = 1.2, color = "red") +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "black", linewidth = 0.8) +
+  labs(x = "Preconception MAP", y = "RR (95% CI)") +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    axis.line.x = element_line(color = "black", linewidth = 0.5),
+    axis.line.y = element_line(color = "black", linewidth = 0.5),
+    axis.ticks = element_line(color = "black", linewidth = 0.5),
+    axis.ticks.length = unit(0.2, "cm")
+  )+
+scale_x_continuous(
+    breaks = seq(50, 150, by = 20),  
+    limits = c(50, 150)               
+  ) +coord_cartesian(ylim = c(1, 4)) +
+  scale_y_continuous(
+    breaks = seq(1, 4, by = 0.5) 
+  )+
+  
+  annotate("text", 
+           x = min(pred_df$MAP_f),
+           y = 4,  
+           label = "outcome",
+           hjust = 0,
+           size = 4,
+           fontface = "bold") +
+  annotate("text", 
+           x = min(pred_df$MAP_f),
+           y = 3.8,  
+           label = "P for nonlinear < 0.001", # manually entered based on the p-values calculated above
+           hjust = 0,
+           size = 4)
+ggsave("plot1.pdf", p, width = 8, height = 6)
+
+#heatmap 4*10
+outcomes <- c("SA", "Medically induced abortion", "PTB", "PID", "SGA", "LGA",
+              "LBW", "Macrosomia", "Birth defects", "Composite ABOs")
+
+bp_groups <- c("Paternal:\nElevated BP", "Paternal:\nHypertension", 
+               "Maternal:\nElevated BP", "Maternal:\nHypertension")
+
+OR_values <- c(
+  # Paternal Elevated BP
+  1.00, 1.05, 1.03, 0.98, 0.93, 1.11, 0.98, 1.09, 0.98, 1.02,
+  # Paternal Hypertension
+  1.17, 1.25, 1.09, 1.12, 1.06, 1.12, 1.19, 1.18, 1.17, 1.10,
+  # Maternal Elevated BP
+  1.04, 1.05, 1.03, 1.04, 1.01, 1.05, 1.12, 1.08, 1.01, 1.03,
+  # Maternal Hypertension
+  1.24, 1.30, 1.30, 1.59, 1.24, 1.07, 1.94, 1.15, 1.13, 1.17
+)
+OR_lower_values <- c(
+  0.99, 1.03, 1.02, 0.95, 0.93, 1.11, 0.96, 1.08, 0.93, 1.02,
+  1.14, 1.21, 1.07, 1.04, 1.04, 1.11, 1.15, 1.16, 1.05, 1.09,
+  1.03, 1.03, 1.02, 1.01, 1.01, 1.05, 1.10, 1.07, 0.96, 1.03,
+  1.19, 1.24, 1.27, 1.45, 1.22, 1.05, 1.86, 1.11, 0.95, 1.16
+)
+OR_upper_values <- c(
+  1.01, 1.06, 1.04, 1.01, 0.94, 1.12, 1.00, 1.10, 1.03, 1.03,
+  1.20, 1.29, 1.11, 1.20, 1.07, 1.13, 1.23, 1.21, 1.30, 1.10,
+  1.06, 1.07, 1.04, 1.08, 1.02, 1.06, 1.14, 1.09, 1.07, 1.04,
+  1.28, 1.36, 1.33, 1.75, 1.27, 1.09, 2.02, 1.19, 1.34, 1.18
+)
+OR_matrix <- matrix(OR_values, nrow = 10, byrow = FALSE)
+OR_lower_matrix <- matrix(OR_lower_values, nrow = 10, byrow = FALSE)
+OR_upper_matrix <- matrix(OR_upper_values, nrow = 10, byrow = FALSE)
+
+heatmap_data <- expand.grid(
+  outcome = outcomes,
+  bp_group = bp_groups,
+  stringsAsFactors = FALSE
+) %>%
+  mutate(
+   outcome = factor(outcome, levels = outcomes),
+    bp_group = factor(bp_group, levels = rev(bp_groups)),
+   OR = as.vector(OR_matrix),
+    OR_lower = as.vector(OR_lower_matrix),
+    OR_upper = as.vector(OR_upper_matrix),
+   label = sprintf("%.2f\n(%.2f-%.2f)", OR, OR_lower, OR_upper),
+    significant = (OR_lower > 1.00) | (OR_upper < 1.00)
+  )
+
+p <- ggplot(heatmap_data, aes(x = outcome, y = bp_group, fill = OR)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+   geom_text(aes(label = label), 
+            color = "black", 
+            size = 3.2, 
+            lineheight = 0.85,
+            fontface = ifelse(heatmap_data$significant, "bold", "plain")) +
+  scale_fill_gradient(
+    low = "white",      
+    high = "darkred",     
+    na.value = "grey80",
+    name = "OR",
+    limits = c(0.9, 2.1),  
+    breaks = c(1, 1.5, 2),
+    labels = c("1.0", "1.5", "2.0")
+  ) +
+  labs(
+    title = "RR(95%CI) of ABOs by Parental BP Status",
+    subtitle = "versus normal BP",
+    x = NULL,
+    y = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(
+      hjust = 0.5, 
+      size = 15, 
+      face = "bold", 
+      color = "#2C3E50",
+      margin = margin(b = 5)
+    ),
+     plot.subtitle = element_text(
+      hjust = 0.5, 
+      size = 13, 
+      face = "plain",      
+      color = "#7F8C8D",   
+      margin = margin(b = 15)
+    ),
+    axis.text.x = element_text(
+      size = 10, 
+      color = "#2C3E50", 
+      face = "plain",
+      angle = 45,          
+      hjust = 1            
+    ),
+    axis.text.y = element_text(size = 10, color = "#2C3E50"),
+    legend.position = "none",
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA)
+  )
+ggsave("plot2.png", plot = p, 
+       width = 10, height = 8, dpi = 300, bg = "white")
+
+#heatmap 3*3
+row_labels <- c("Normal BP", "Elevated BP","Hypertension") 
+col_labels <- c("Normal BP", "Elevated BP", "Hypertension") 
+RR_matrix <- matrix(c(
+ NA,   1.03, 1.09, 
+ 1.04, 1.05, 1.14,  
+1.20, 1.19, 1.24  
+), nrow = 3, byrow = TRUE)
+
+RR_lower <- matrix(c(
+  NA,   1.03, 1.08,
+  1.04, 1.05, 1.13,
+  1.18, 1.17, 1.21
+), nrow = 3, byrow = TRUE)
+
+RR_upper <- matrix(c(
+  NA,   1.03, 1.10,
+  1.05, 1.06, 1.15,
+  1.23, 1.21, 1.26
+), nrow = 3, byrow = TRUE)
+heatmap_data <- expand.grid(
+  paternal_bp = row_labels,
+  maternal_bp = col_labels,
+  stringsAsFactors = FALSE
+) %>%
+  mutate(
+    paternal_bp = factor(paternal_bp, levels = row_labels),
+    maternal_bp = factor(maternal_bp, levels =col_labels),
+    RR = as.vector(t(RR_matrix)),
+    RR_lower = as.vector(t(RR_lower)),
+    RR_upper = as.vector(t(RR_upper)),
+    
+    label = case_when(
+      is.na(RR) ~ "Reference",
+      TRUE ~ sprintf("%.2f\n(%.2f-%.2f)", RR, RR_lower, RR_upper)
+    ),
+    
+    significant = !is.na(RR) & (RR_lower > 1.00),
+    
+    fill_value = ifelse(is.na(RR), 1, RR)
+  )
+
+p <- ggplot(heatmap_data, aes(x = maternal_bp, y = paternal_bp, fill = fill_value)) +
+  
+  geom_tile(color = "white", linewidth = 0.8) +
+  
+  geom_text(aes(label = label, fontface = ifelse(significant, "bold", "plain")),
+            color = "black", 
+            size = 5, 
+            lineheight = 0.85) +
+  
+  scale_fill_gradient(
+    low = "#FFFFFF",
+    high = "#C0392B",
+    na.value = "white",
+    limits = c(1.0, 1.3),
+    breaks = c(1.0, 1.1, 1.2, 1.3),
+    labels = c("1.0", "1.1", "1.2", "1.3"),
+    name = "RR"
+  ) +
+  
+  labs(
+    title = "RR(95%CI) of Composit ABOs",
+    subtitle = "P for interaction < 0.0001",
+    x = "Maternal BP",
+    y = "Paternal BP"
+  ) +
+  
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(
+      hjust = 0.5, 
+      size = 15, 
+      face = "bold", 
+      color = "#2C3E50",
+      margin = margin(b = 5)
+    ),
+    plot.subtitle = element_text(
+      hjust = 0.5, 
+      size = 13, 
+      face = "plain",
+      color = "#7F8C8D",
+      margin = margin(b = 15)
+    ),
+    axis.title.x = element_text(size = 12, face = "bold", color = "#2C3E50"),
+    axis.title.y = element_text(size = 12, face = "bold", color = "#2C3E50"),
+    axis.text.x = element_text(size = 11, color = "#2C3E50", face = "plain"),
+    axis.text.y = element_text(size = 11, color = "#2C3E50", face = "plain"),
+    legend.position = "none", 
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA)
+  )
+
+ggsave("plot3.png", plot = p, 
+       width = 8, height = 7, dpi = 300, bg = "white")
+
+#PAF
+library(dplyr)
+library(ggplot2)
+maternal_stacked <- data.frame(
+  Outcome = rep(c("Spontaneous abortion", "Medically induced abortion", 
+                  "Preterm birth", "Perinatal death", "Small for gestational age",
+                  "Large for gestational age", "Low birth weight", "Macrosomia",
+                  "Birth defects", "Composite adverse birth outcomes"), each = 2),
+  BP_Type = rep(c("Elevated BP", "Hypertension"), 10),
+  PAF = c(1.77, 0.74, 3.47, 1.22, 1.52, 0.63, 1.77, 1.22, 
+          -0.52, 0.33, 3.23, 0.36, 3.47, 2.01, 3.95, 0.66,
+          NA, 0.47, 1.52, 0.43),
+  Parent = "Mother"
+)
+
+paternal_stacked <- data.frame(
+  Outcome = rep(c("Spontaneous abortion", "Medically induced abortion", 
+                  "Preterm birth", "Perinatal death", "Small for gestational age",
+                  "Large for gestational age", "Low birth weight", "Macrosomia",
+                  "Birth defects", "Composite adverse birth outcomes"), each = 2),
+  BP_Type = rep(c("Elevated BP", "Hypertension"), 10),
+  PAF = c(NA, 1.56, 6.23, 3.25, 2.97, 0.76, NA, 0.90,
+          -5.38, 0.34, 8.85, 1.28, 0.50, 2.62, 7.99, 2.07,
+          NA, 1.70, 2.00, 0.86),
+  Parent = "Father"
+)
+combined_stacked <- rbind(maternal_stacked, paternal_stacked)
+combined_stacked$PAF_stack <- combined_stacked$PAF
+combined_stacked$PAF_stack[!is.na(combined_stacked$PAF_stack) & combined_stacked$PAF_stack < 0] <- 0
+
+outcome_labels <- c(
+  "Spontaneous abortion" = "natrual_pre",
+  "Medically induced abortion" = "Medically_induced_abortion",
+  "Preterm birth" = "PTB",
+  "Perinatal death" = "PID",
+  "Small for gestational age" = "SGA",
+  "Large for gestational age" = "LGA",
+  "Low birth weight" = "LBW",
+  "Macrosomia" = "macrosomia",
+  "Birth defects" = "birth_defects",
+  "Composite adverse birth outcomes" = "com_apo"
+)
+
+combined_stacked$Outcome_short <- factor(combined_stacked$Outcome,
+                                         levels = names(outcome_labels),
+                                         labels = outcome_labels)
+
+sum_data <- combined_stacked %>%
+  group_by(Outcome_short, Parent) %>%
+  summarise(Sum_PAF = sum(PAF[PAF > 0], na.rm = TRUE), .groups = "drop")
+
+plot_data <- combined_stacked[!is.na(combined_stacked$PAF_stack) & combined_stacked$PAF_stack > 0, ]
+color_mapping <- c(
+  "Mother_Elevated BP" = "#FFA07A",
+  "Mother_Hypertension" = "#FF6347",
+  "Father_Elevated BP" = "#E6F2FA",
+  "Father_Hypertension" = "#4682B4"
+)
+
+label_mapping <- c(
+  "Mother_Elevated BP" = "Maternal: Elevated BP",
+  "Mother_Hypertension" = "Maternal: Hypertension",
+  "Father_Elevated BP" = "Paternal: Elevated BP",
+  "Father_Hypertension" = "Paternal: Hypertension"
+)
+
+plot_data$Parent_BP <- paste(plot_data$Parent, plot_data$BP_Type, sep = "_")
+plot_data$ColorGroup <- factor(plot_data$Parent_BP, 
+                               levels = names(color_mapping),
+                               labels = names(color_mapping))
+bar_width <- 0.08
+outcome_spacing <- 0.25   
+parent_offset <- 0.047
+
+plot_data$x_pos <- as.numeric(plot_data$Outcome_short) * outcome_spacing + 
+  ifelse(plot_data$Parent == "Mother", -parent_offset, parent_offset)
+
+sum_data$x_pos <- as.numeric(sum_data$Outcome_short) * outcome_spacing + 
+  ifelse(sum_data$Parent == "Mother", -parent_offset, parent_offset)
+
+negative_data$x_pos <- as.numeric(negative_data$Outcome_short) * outcome_spacing + 
+  ifelse(negative_data$Parent == "Mother", -parent_offset, parent_offset)
+
+p <- ggplot() +
+  
+  geom_hline(yintercept = 0, color = "black", linewidth = 0.5) +
+  geom_col(
+    data = plot_data,
+    aes(x = x_pos, y = PAF_stack, fill = ColorGroup),
+    position = position_stack(reverse = TRUE),
+    width = bar_width,
+    color = "white",
+    linewidth = 0.2
+  ) +
+  geom_text(
+    data = sum_data,
+    aes(x = x_pos, y = Sum_PAF + 0.15, label = sprintf("%.2f", Sum_PAF)),
+    size = 2.2,
+    vjust = 0
+  )  +
+  scale_fill_manual(
+    name = "Parent & BP Category",
+    values = color_mapping,
+    labels = label_mapping
+  ) +
+  scale_x_continuous(
+    breaks = seq(1, length(outcome_labels)) * outcome_spacing,
+    labels = outcome_labels,
+    expand = expansion(mult = c(0.05, 0.05))
+  ) +
+  labs(
+    title = "",
+    subtitle = "",
+    x = NULL,
+    y = "PAF (%)"
+  ) +
+  scale_y_continuous(
+    expand = expansion(mult = c(0.02, 0.06)),
+    breaks = seq(0, 12, 2),
+    limits = c(-0.3, 11)
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 13),
+    plot.subtitle = element_text(hjust = 0.5, size = 9, color = "gray30"),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 7.5, face = "bold"),
+    axis.title.y = element_text(size = 10),
+    legend.position = c(0.88, 0.82),
+    legend.background = element_rect(fill = "white", color = "black", linewidth = 0.3),
+    legend.title = element_text(face = "bold", size = 8.5),
+    legend.text = element_text(size = 7.5),
+    legend.key.size = unit(0.45, "cm"),
+    
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    axis.line.y = element_blank(),
+    axis.ticks.y = element_line(color = "black"),
+    panel.background = element_blank(),
+    plot.margin = margin(t = 10, r = 18, b = 10, l = 10)
+  )
+ggsave("plot4.pdf", plot = p, width = 9, height = 7)
+dev.off()
+
+#Scatter plot
+library(ggplot2)
+cor_test <- cor.test(data$MAP_f, data$MAP_m)
+r <- cor_test$estimate
+p_value <- cor_test$p.value
+p_text <- ifelse(p_value < 0.001, "p < 0.001", paste("p =", round(p_value, 3)))
+
+p <- ggplot(data, aes(x = MAP_f, y = MAP_m)) +
+  geom_point(alpha = 0.3, size = 0.8, color = "steelblue") +
+  geom_smooth(method = "lm", se = TRUE, color = "red") +
+  annotate("text", x = Inf, y = -Inf, 
+           label = paste("r =", round(r, 3), "\n", p_text), 
+           hjust = 1.1, vjust = -0.5, size = 5) +
+  labs(x = "Father's MAP (mm Hg)", y = "Mother's MAP (mm Hg)") +
+  theme_minimal()
+
+pdf("plot5.pdf", width = 7, height = 5)
+print(p)
+dev.off()
