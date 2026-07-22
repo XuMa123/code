@@ -1,0 +1,139 @@
+#Exposure classifications
+#female
+library(dplyr)
+  data <- data %>%
+  mutate(
+    BP_f_classification = case_when( 
+      bp_self_report_f ==1 | sbp_level_f>=140 | dbp_level_f >= 90 ~ "hbp",
+      sbp_level_f >=120 & sbp_level_f<140 | dbp_level_f>=80 & dbp_level_f < 90 ~ "ebp",
+      sbp_level_f < 120 & dbp_level_f < 80 ~ "normal",
+      TRUE ~ NA_character_
+    ),
+    BP_f_classification = factor(BP_f_classification, levels = c("normal","ebp","hbp"))
+  )
+#male
+data <- data %>%
+  mutate(
+    BP_m_classification = case_when( 
+      bp_self_report_m ==1 | sbp_level_m>=140 | dbp_level_m >= 90 ~ "hbp",
+      sbp_level_m >=120 & sbp_level_m<140 | dbp_level_m>=80 & dbp_level_m < 90 ~ "ebp",
+      sbp_level_m < 120 & dbp_level_m < 80 ~ "normal",
+      TRUE ~ NA_character_
+    ),
+    BP_m_classification = factor(BP_m_classification, levels = c("normal","ebp","hbp"))
+  )
+#outcome definition  
+#PTB
+data <- data %>%  
+  mutate(
+  PTB = case_when(
+Gestational_age < 37 & Gestational_age > 28 ~ 1, 
+Gestational_age >= 37 ~ 0,
+TRUE ~ NA_real_
+    ))
+#LBW/Macrosomia
+data$macrosomia <- ifelse(data$Fetus_baby_weight > 4000, 1,
+                          ifelse(data$Fetus_baby_weight <= 4000, 0, NA))
+
+data$LBW <- ifelse(data$Fetus_baby_weight < 2500, 1,
+                          ifelse(data$Fetus_baby_weight >= 2500, 0, NA))
+#SGA/LGA
+library(data.table) 
+setDT(data) 
+ref_table <- data[, .(
+  P10 = quantile(Fetus_baby_weight, 0.10, na.rm = TRUE),
+  P90 = quantile(Fetus_baby_weight, 0.90, na.rm = TRUE)
+), by = .(Fetus_baby_sex, Gestational_age)]
+
+data[ref_table, on = c("Fetus_baby_sex", "Gestational_age"), `:=`(
+  P10 = i.P10,
+  P90 = i.P90
+)]
+data[, `:=`(
+  SGA = as.integer(Fetus_baby_weight < P10),
+  LGA = as.integer(Fetus_baby_weight > P90)
+)] 
+
+#composite adverse birth outcomes
+data$com_apo <- ifelse(
+  data$PTB == 1 | 
+    data$medically_induced_abortion == 1 | 
+    data$natrual_pre == 1 | 
+    data$LBW == 1 | 
+    data$macrosomia == 1 | 
+    data$SGA == 1 | 
+    data$LGA == 1 |
+    data$birth_defects == 1 | 
+    data$PID == 1, 1, 
+  ifelse(
+    data$PTB == 0 & 
+      data$medically_induced_abortion == 0 & 
+      data$natrual_pre == 0 & 
+      data$LBW == 0 & 
+      data$macrosomia == 0 & 
+      data$SGA == 0 & 
+      data$LGA == 0 &
+      data$birth_defects == 0 & 
+      data$PID == 0, 0, NA
+  )
+)
+
+#independent effect
+#female
+library(speedglm)
+library(tidyverse)
+model1<-speedglm(outcome~BP_f_classification+maternal_age+paternal_age+maternal_bmi+paternal_bmi
+               +maternal_smoking+maternal_drinking+paternal_smoking+paternal_drinking
+               +maternal_ethnicity+maternal_use_medicine+maternal_education+maternal_residence+maternal_economic_pressure+region
+               +paternal_ethnicity+paternal_use_medicine+paternal_education+paternal_residence+paternal_economic_pressure
+               +harmful_exposures+history_apo+parity+diabetes+MAP_m,  #The mean arterial pressure（MAP） of spouses was mutually adjusted
+               family = poisson(link ="log"), data=data)
+result1 <- cbind(RR = exp(coef(model1)),exp(confint(model1)),
+                p_value = summary(model1)$coefficients[, "Pr(>|z|)"])
+result1
+
+#p value for trend
+trend_p <- speedglm(outcome ~ as.numeric(BP_f_classification) +maternal_age+paternal_age+maternal_bmi+paternal_bmi
+               +maternal_smoking+maternal_drinking+paternal_smoking+paternal_drinking
+               +maternal_ethnicity+maternal_use_medicine+maternal_education+maternal_residence+maternal_economic_pressure+region
+               +paternal_ethnicity+paternal_use_medicine+paternal_education+paternal_residence+paternal_economic_pressure
+               +harmful_exposures+history_apo+parity+diabetes+MAP_m, 
+                        family = poisson(link = "log"), 
+                        data = data)
+trend_p <- summary(trend_test)$coefficients["as.numeric(BP_f_classification)", "Pr(>|z|)"] 
+
+#interaction effect
+library(speedglm)
+library(tidyverse)
+model2 <- speedglm(outcome ~ relevel(interaction(BP_f_classification, BP_m_classification), ref = "normal.normal") +maternal_age+paternal_age+maternal_bmi+paternal_bmi
+               +maternal_smoking+maternal_drinking+paternal_smoking+paternal_drinking
+               +maternal_ethnicity+maternal_use_medicine+maternal_education+maternal_residence+maternal_economic_pressure+region
+               +paternal_ethnicity+paternal_use_medicine+paternal_education+paternal_residence+paternal_economic_pressure
+               +harmful_exposures+history_apo+parity+diabetes, 
+             family = poisson(link ="log"), data = data)
+result2 <- exp(cbind(RR = coef(model2), confint(model2)))
+result2
+
+#p for interaction
+library(lmtest)
+model_main <- speedglm(
+  outcome ~ BP_m_classification+BP_f_classification+maternal_age+paternal_age+maternal_bmi+paternal_bmi
+               +maternal_smoking+maternal_drinking+paternal_smoking+paternal_drinking
+               +maternal_ethnicity+maternal_use_medicine+maternal_education+maternal_residence+maternal_economic_pressure+region
+               +paternal_ethnicity+paternal_use_medicine+paternal_education+paternal_residence+paternal_economic_pressure
+               +harmful_exposures+history_apo+parity+diabetes,
+  family = poisson(link = "log"),
+  data = data
+)
+model_interaction <- speedglm(
+  outcome ~ BP_m_classification*BP_f_classification+maternal_age+paternal_age+maternal_bmi+paternal_bmi
+               +maternal_smoking+maternal_drinking+paternal_smoking+paternal_drinking
+               +maternal_ethnicity+maternal_use_medicine+maternal_education+maternal_residence+maternal_economic_pressure+region
+               +paternal_ethnicity+paternal_use_medicine+paternal_education+paternal_residence+paternal_economic_pressure
+               +harmful_exposures+history_apo+parity+diabetes,
+  family = poisson(link = "log"),
+  data = data
+)
+lrtest_result <- lrtest(model_main, model_interaction)
+interaction_p <- lrtest_result[2, "Pr(>Chisq)"]
+summary(model_interaction)
